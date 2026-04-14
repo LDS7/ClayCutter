@@ -1,40 +1,86 @@
 #include <TM1637Display.h>
 
+// --------------------
+// Пины
+// --------------------
 const byte pulsePin  = 2;    // вход импульсов
 const byte outputPin = 13;   // выход
-const byte buttonPin = 4;    // кнопка
+
+// Кнопки
+const byte btnPlus1   = 4;
+const byte btnPlus10  = 5;
+const byte btnPlus100 = 6;
+const byte btnMinus1  = 7;
+const byte btnMinus10 = 8;   // B0
+const byte btnMinus100= 9;   // B1
 
 // TM1637
-#define CLK 12
-#define DIO 11
-TM1637Display display(CLK, DIO);
+const byte dioPin = 11;      // B3
+const byte clkPin = 12;      // B4
+TM1637Display display(clkPin, dioPin);
 
+// --------------------
+// Параметры
+// --------------------
 volatile unsigned int pulseCount = 0;
 
-const unsigned int pulsesPerToggle = 100;
+// Значение уставки. Ограничим диапазоном дисплея 1...9999
+unsigned int pulsesPerToggle = 100;
+
+const unsigned int minPulsesPerToggle = 1;
+const unsigned int maxPulsesPerToggle = 9999;
+
+// --------------------
+// Для антидребезга кнопок
+// --------------------
+const unsigned long debounceMs = 30;
+
+struct ButtonState {
+  byte pin;
+  bool lastReading;
+  bool stableState;
+  unsigned long lastChangeTime;
+};
+
+ButtonState buttons[6] = {
+  {btnPlus1,    HIGH, HIGH, 0},
+  {btnPlus10,   HIGH, HIGH, 0},
+  {btnPlus100,  HIGH, HIGH, 0},
+  {btnMinus1,   HIGH, HIGH, 0},
+  {btnMinus10,  HIGH, HIGH, 0},
+  {btnMinus100, HIGH, HIGH, 0}
+};
 
 void setup() {
   pinMode(pulsePin, INPUT_PULLUP);
   pinMode(outputPin, OUTPUT);
-  pinMode(buttonPin, INPUT_PULLUP);
-
   digitalWrite(outputPin, LOW);
 
-  attachInterrupt(digitalPinToInterrupt(pulsePin), pulseISR, FALLING);
+  pinMode(btnPlus1, INPUT_PULLUP);
+  pinMode(btnPlus10, INPUT_PULLUP);
+  pinMode(btnPlus100, INPUT_PULLUP);
+  pinMode(btnMinus1, INPUT_PULLUP);
+  pinMode(btnMinus10, INPUT_PULLUP);
+  pinMode(btnMinus100, INPUT_PULLUP);
 
-  // инициализация дисплея
-  display.setBrightness(0x0f); // яркость 0–15
-  display.showNumberDec(pulsesPerToggle, true); // вывод числа
+  display.setBrightness(7);
+  updateDisplay();
+
+  attachInterrupt(digitalPinToInterrupt(pulsePin), pulseISR, FALLING);
 }
 
 void loop() {
+  handlePulseToggle();
+  handleButtons();
+}
+
+void handlePulseToggle() {
   unsigned int count;
 
   noInterrupts();
   count = pulseCount;
   interrupts();
 
-  // каждые N импульсов → инверсия
   if (count >= pulsesPerToggle) {
     noInterrupts();
     pulseCount = 0;
@@ -42,23 +88,53 @@ void loop() {
 
     digitalWrite(outputPin, !digitalRead(outputPin));
   }
+}
 
-  // обработка кнопки
-  if (digitalRead(buttonPin) == LOW) {
-    delay(20);
+void handleButtons() {
+  checkButton(buttons[0], +1);
+  checkButton(buttons[1], +10);
+  checkButton(buttons[2], +100);
+  checkButton(buttons[3], -1);
+  checkButton(buttons[4], -10);
+  checkButton(buttons[5], -100);
+}
 
-    if (digitalRead(buttonPin) == LOW) {
-      noInterrupts();
-      pulseCount = 0;
-      interrupts();
+void checkButton(ButtonState &btn, int delta) {
+  bool reading = digitalRead(btn.pin);
 
-      digitalWrite(outputPin, !digitalRead(outputPin));
+  if (reading != btn.lastReading) {
+    btn.lastChangeTime = millis();
+    btn.lastReading = reading;
+  }
 
-      while (digitalRead(buttonPin) == LOW) {
-        delay(10);
+  if ((millis() - btn.lastChangeTime) > debounceMs) {
+    if (reading != btn.stableState) {
+      btn.stableState = reading;
+
+      // Срабатывание по нажатию
+      if (btn.stableState == LOW) {
+        changeSetpoint(delta);
       }
     }
   }
+}
+
+void changeSetpoint(int delta) {
+  int newValue = (int)pulsesPerToggle + delta;
+
+  if (newValue < (int)minPulsesPerToggle) {
+    newValue = minPulsesPerToggle;
+  }
+  if (newValue > (int)maxPulsesPerToggle) {
+    newValue = maxPulsesPerToggle;
+  }
+
+  pulsesPerToggle = (unsigned int)newValue;
+  updateDisplay();
+}
+
+void updateDisplay() {
+  display.showNumberDec(pulsesPerToggle, false);
 }
 
 void pulseISR() {
