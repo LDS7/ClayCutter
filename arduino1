@@ -1,4 +1,5 @@
 #include <TM1637Display.h>
+#include <EEPROM.h>
 
 // --------------------
 // Пины
@@ -7,16 +8,16 @@ const byte pulsePin  = 2;    // вход импульсов
 const byte outputPin = 13;   // выход
 
 // Кнопки
-const byte btnPlus1   = 4;
-const byte btnPlus10  = 5;
-const byte btnPlus100 = 6;
-const byte btnMinus1  = 7;
-const byte btnMinus10 = 8;   // B0
-const byte btnMinus100= 9;   // B1
+const byte btnPlus1    = 4;
+const byte btnPlus10   = 5;
+const byte btnPlus100  = 6;
+const byte btnMinus1   = 7;
+const byte btnMinus10  = 8;   // B0 / D8
+const byte btnMinus100 = 9;   // B1 / D9
 
 // TM1637
-const byte dioPin = 11;      // B3
-const byte clkPin = 12;      // B4
+const byte dioPin = 11;      // B3 / D11
+const byte clkPin = 12;      // B4 / D12
 TM1637Display display(clkPin, dioPin);
 
 // --------------------
@@ -24,14 +25,21 @@ TM1637Display display(clkPin, dioPin);
 // --------------------
 volatile unsigned int pulseCount = 0;
 
-// Значение уставки. Ограничим диапазоном дисплея 1...9999
 unsigned int pulsesPerToggle = 100;
 
-const unsigned int minPulsesPerToggle = 1;
+const unsigned int minPulsesPerToggle = 30;
 const unsigned int maxPulsesPerToggle = 9999;
 
 // --------------------
-// Для антидребезга кнопок
+// EEPROM
+// --------------------
+const int eepromAddress = 0;
+bool eepromDirty = false;
+unsigned long lastSetpointChangeMs = 0;
+const unsigned long eepromSaveDelayMs = 1000;
+
+// --------------------
+// Антидребезг кнопок
 // --------------------
 const unsigned long debounceMs = 30;
 
@@ -64,6 +72,8 @@ void setup() {
   pinMode(btnMinus100, INPUT_PULLUP);
 
   display.setBrightness(7);
+
+  loadSetpointFromEEPROM();
   updateDisplay();
 
   attachInterrupt(digitalPinToInterrupt(pulsePin), pulseISR, FALLING);
@@ -72,6 +82,7 @@ void setup() {
 void loop() {
   handlePulseToggle();
   handleButtons();
+  handleEEPROMSave();
 }
 
 void handlePulseToggle() {
@@ -111,7 +122,6 @@ void checkButton(ButtonState &btn, int delta) {
     if (reading != btn.stableState) {
       btn.stableState = reading;
 
-      // Срабатывание по нажатию
       if (btn.stableState == LOW) {
         changeSetpoint(delta);
       }
@@ -129,8 +139,37 @@ void changeSetpoint(int delta) {
     newValue = maxPulsesPerToggle;
   }
 
-  pulsesPerToggle = (unsigned int)newValue;
-  updateDisplay();
+  if ((unsigned int)newValue != pulsesPerToggle) {
+    pulsesPerToggle = (unsigned int)newValue;
+
+    noInterrupts();
+    pulseCount = 0;
+    interrupts();
+
+    updateDisplay();
+
+    eepromDirty = true;
+    lastSetpointChangeMs = millis();
+  }
+}
+
+void handleEEPROMSave() {
+  if (eepromDirty && (millis() - lastSetpointChangeMs >= eepromSaveDelayMs)) {
+    EEPROM.put(eepromAddress, pulsesPerToggle);
+    eepromDirty = false;
+  }
+}
+
+void loadSetpointFromEEPROM() {
+  unsigned int storedValue = 0;
+  EEPROM.get(eepromAddress, storedValue);
+
+  if (storedValue >= minPulsesPerToggle && storedValue <= maxPulsesPerToggle) {
+    pulsesPerToggle = storedValue;
+  } else {
+    pulsesPerToggle = 100;
+    EEPROM.put(eepromAddress, pulsesPerToggle);
+  }
 }
 
 void updateDisplay() {
