@@ -1,0 +1,66 @@
+#include <TM1637Display.h>
+
+const byte pulsePin  = 2;    // вход импульсов
+const byte outputPin = 13;   // выход
+const byte buttonPin = 4;    // кнопка
+
+// TM1637
+#define CLK 12
+#define DIO 11
+TM1637Display display(CLK, DIO);
+
+volatile unsigned int pulseCount = 0;
+
+const unsigned int pulsesPerToggle = 100;
+
+void setup() {
+  pinMode(pulsePin, INPUT_PULLUP);
+  pinMode(outputPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  digitalWrite(outputPin, LOW);
+
+  attachInterrupt(digitalPinToInterrupt(pulsePin), pulseISR, FALLING);
+
+  // инициализация дисплея
+  display.setBrightness(0x0f); // яркость 0–15
+  display.showNumberDec(pulsesPerToggle, true); // вывод числа
+}
+
+void loop() {
+  unsigned int count;
+
+  noInterrupts();
+  count = pulseCount;
+  interrupts();
+
+  // каждые N импульсов → инверсия
+  if (count >= pulsesPerToggle) {
+    noInterrupts();
+    pulseCount = 0;
+    interrupts();
+
+    digitalWrite(outputPin, !digitalRead(outputPin));
+  }
+
+  // обработка кнопки
+  if (digitalRead(buttonPin) == LOW) {
+    delay(20);
+
+    if (digitalRead(buttonPin) == LOW) {
+      noInterrupts();
+      pulseCount = 0;
+      interrupts();
+
+      digitalWrite(outputPin, !digitalRead(outputPin));
+
+      while (digitalRead(buttonPin) == LOW) {
+        delay(10);
+      }
+    }
+  }
+}
+
+void pulseISR() {
+  pulseCount++;
+}
